@@ -46,7 +46,7 @@ jobs:
 
           mkdir dart-sdk
           cd dart-sdk
-          gclient config --name sdk https://dart.googlesource.com/sdk.git@${{ inputs.ref }}
+          gclient config --name sdk https://github.com/dart-loong64/sdk.git@${{ inputs.ref }}
           gclient sync --no-history
 
       - name: Get Checked-in Dart SDK Version
@@ -61,8 +61,8 @@ jobs:
             gh attestation verify dartsdk-linux-${{ matrix.host-arch }}-release.tar.gz --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build.yml@refs/tags/${{ steps.version.outputs.version }}
             rm -rf dart-sdk/sdk/tools/sdks/dart-sdk
             tar -xzf dartsdk-linux-${{ matrix.host-arch }}-release.tar.gz -C dart-sdk/sdk/tools/sdks
-          else
-            gh workflow run build.yml --repo ${{ github.repository }} --raw-field ref=${{ steps.version.outputs.version }}
+          # else
+          #   gh workflow run build.yml --repo ${{ github.repository }} --raw-field ref=${{ steps.version.outputs.version }}
           fi
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,24 +98,31 @@ jobs:
       id-token: write
 
     container:
-      image: docker.io/library/alpine
+      image: docker.io/library/debian
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - host-arch: arm64
-            target-arch: arm
+          # - host-arch: arm64
+          #   target-arch: arm
           - host-arch: arm64
             target-arch: arm64
           - host-arch: x64
-            target-arch: riscv64
+            target-arch: loong64
+          # - host-arch: x64
+          #   target-arch: riscv64
           - host-arch: x64
             target-arch: x64
 
     steps:
-      - name: Setup node:alpine for JavaScript Actions
-        uses: dart-musl/setup-node-alpine-for-javascript-actions@v1
+      - name: Cache
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache
+          key: ${{ runner.os }}-dart-${{ inputs.ref }}-${{ matrix.target-arch }}-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-dart-${{ inputs.ref }}-${{ matrix.target-arch }}-
 
       - name: Download Artifact
         uses: actions/download-artifact@v8
@@ -130,24 +137,29 @@ jobs:
       - name: Verify Checked-in Dart SDK
         run: |
           cd dart-sdk/sdk
-          if ! ./tools/sdks/dart-sdk/bin/dart --version; then
-            apk add --no-cache -- gcompat
-            ./tools/sdks/dart-sdk/bin/dart --version
-          fi
+          ./tools/sdks/dart-sdk/bin/dart --version
 
       - name: Install build tools
         run: |
-          apk add --no-cache -- bash clang curl git gn lld llvm python3
-
-      - name: Install sysroots
-        run: |
-          cd dart-sdk/sdk
-          ./build/linux/alpine_sysroot_scripts/install-sysroot.sh
+          apt-get update
+          apt-get install -y ccache clang curl git gn lld llvm ninja-build python3 sudo tar
+          apt-get install -y g++
+          case ${{ matrix.target-arch }} in
+            "loong64")
+              apt-get install -y g++-loongarch64-linux-gnu
+              ;;
+            "riscv64")
+              apt-get install -y g++-riscv64-linux-gnu
+              ;;
+            "arm")
+              apt-get install -y g++-arm-linux-gnueabihf
+              ;;
+          esac
 
       - name: Build
         run: |
           cd dart-sdk/sdk
-          ./tools/build.py --mode release --arch ${{ matrix.target-arch }} --gn-args 'dart_sysroot="alpine"' create_sdk
+          ./tools/build.py --no-clang --mode release --arch ${{ matrix.target-arch }} --gn-args 'use_ccache=true' create_sdk
 
       - name: Archive
         run: |
@@ -190,7 +202,7 @@ jobs:
 
       - name: Tag
         run: |
-          if git ls-remote --exit-code --tags https://dart.googlesource.com/sdk.git "${{ inputs.ref }}"; then
+          if git ls-remote --exit-code --tags https://github.com/dart-loong64/sdk.git "${{ inputs.ref }}"; then
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git config user.name github-actions[bot]
             if test -n "$(git tag -l ${{ inputs.ref }})"; then
